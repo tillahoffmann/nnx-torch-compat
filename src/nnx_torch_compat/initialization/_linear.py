@@ -19,7 +19,7 @@ def _linear_kernel_factory(**module_kwargs) -> nnx.Initializer:
         transposed_shape = (shape[1], shape[0])
         x = torch.empty(transposed_shape)
         torch_init.kaiming_uniform_(x, a=math.sqrt(5))
-        return x.T
+        return x.T.numpy()
 
     return _initializer
 
@@ -31,7 +31,7 @@ def _linear_bias_factory(in_features: int, **module_kwargs) -> nnx.Initializer:
         x = torch.empty(shape)
         bound = 1 / math.sqrt(in_features) if in_features > 0 else 0
         torch_init.uniform_(x, -bound, bound)
-        return x
+        return x.numpy()
 
     return _initializer
 

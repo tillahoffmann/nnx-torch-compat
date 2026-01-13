@@ -34,6 +34,10 @@ def _compare_modules(
         )
         torch_value: numpy.ndarray = torch_getter(torch_module).detach().numpy()
 
+        assert nnx_value.shape == torch_value.shape, (
+            f"Incompatible NNX and PyTorch shapes: {nnx_value.shape} and {torch_value.shape}."
+        )
+
         if equal:
             assert (nnx_value == torch_value).all(), (
                 f"Parameters '{nnx_module}.{nnx_param}' and '{torch_module}.{torch_param} differ."
@@ -62,6 +66,17 @@ def _compare_modules(
             (10, 3),
             jnp.float32,
             (10, 4),
+        ),
+        (
+            nnx.Embed,
+            {"num_embeddings": 10, "features": 7},
+            {"embedding": None},
+            nn.Embedding,
+            {"num_embeddings": 10, "embedding_dim": 7},
+            {"weight": None},
+            (11, 3),
+            jnp.int32,
+            (11, 3, 7),
         ),
     ],
 )
@@ -94,16 +109,23 @@ def test_initialization(
     _compare_modules(
         patched_nnx_module, nnx_params, torch_module, torch_params, equal=True
     )
+
+    # Verify shapes and types.
     for nnx_param in nnx_params:
-        assert isinstance(getattr(patched_nnx_module, nnx_param), nnx.Param), (
+        patched_param = getattr(patched_nnx_module, nnx_param)
+        assert isinstance(patched_param, nnx.Param), (
             f"Parameter '{nnx_param}' is not a Flax parameter."
         )
+        default_param = getattr(default_nnx_module, nnx_param)
+        assert patched_param.shape == default_param.shape
 
     key = random.key(42)
     if input_dtype == jnp.float32:
         x = random.normal(key, input_shape)
+    elif input_dtype == jnp.int32:
+        x = random.randint(key, input_shape, 0, nnx_args.get("num_embeddings", 10))
     else:
-        raise NotImplementedError
+        raise NotImplementedError(f"Unsupported dtype: {input_dtype}")
 
     y = patched_nnx_module(x)
     assert y.shape == output_shape

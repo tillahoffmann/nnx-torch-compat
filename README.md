@@ -1,4 +1,4 @@
-# Flax NNX PyTorch Compat
+# Flax NNX PyTorch Compat [![Flax NNX PyTorch Compat](https://github.com/tillahoffmann/nnx-torch-compat/actions/workflows/ci.yml/badge.svg)](https://github.com/tillahoffmann/nnx-torch-compat/actions/workflows/ci.yml)
 
 Reproducing machine learning experiments is difficult, in part because different frameworks use different default values and initialization schemes. Flax NNX PyTorch Compat implements a context manager to initialize Flax NNX models in exactly the same way as their corresponding PyTorch model.
 
