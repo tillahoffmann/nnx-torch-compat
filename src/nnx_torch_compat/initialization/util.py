@@ -29,6 +29,7 @@ def register_initializer(
         ValueError: If an initializer is already registered for the module type and
             :code:`update == False`.
     """
+    assert initializer_factories, "No initializer factory provided."
     if type in _INITIALIZER_REGISTRY and not update:
         raise ValueError(f"Initializer is already registered for module type '{type}'.")
     _INITIALIZER_REGISTRY[type] = initializer_factories

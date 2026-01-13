@@ -32,19 +32,25 @@ def _compare_modules(
         torch_getter = torch_getter or (
             lambda _, p=torch_param: getattr(torch_module, p)
         )
-        torch_value: numpy.ndarray = torch_getter(torch_module).detach().numpy()
+        torch_value = torch_getter(torch_module)
+        if isinstance(torch_value, torch.Tensor):
+            torch_value = torch_value.detach().numpy()
 
-        assert nnx_value.shape == torch_value.shape, (
-            f"Incompatible NNX and PyTorch shapes: {nnx_value.shape} and {torch_value.shape}."
+        nnx_shape = numpy.shape(nnx_value)
+        torch_shape = numpy.shape(torch_value)
+        assert nnx_shape == torch_shape, (
+            f"Incompatible NNX and PyTorch shapes: {nnx_shape} and {torch_shape}."
         )
 
         if equal:
             assert (nnx_value == torch_value).all(), (
-                f"Parameters '{nnx_module}.{nnx_param}' and '{torch_module}.{torch_param} differ."
+                f"Parameters '{nnx_module.__class__}.{nnx_param}' and "
+                f"'{torch_module.__class__}.{torch_param} differ."
             )
         else:
             assert not (nnx_value == torch_value).any(), (
-                f"Parameters '{nnx_module}.{nnx_param}' and '{torch_module}.{torch_param} are the same."
+                f"Parameters '{nnx_module.__class__}.{nnx_param}' and "
+                f"'{torch_module.__class__}.{torch_param} are the same."
             )
 
         nnx_values[nnx_param] = nnx_value
@@ -78,6 +84,17 @@ def _compare_modules(
             jnp.int32,
             (11, 3, 7),
         ),
+        (
+            nnx.LayerNorm,
+            {"num_features": 6},
+            {"bias": None, "scale": None, "epsilon": None},
+            nn.LayerNorm,
+            {"normalized_shape": (6,)},
+            {"bias": None, "weight": None, "eps": None},
+            (12, 6),
+            jnp.float32,
+            (12, 6),
+        ),
     ],
 )
 def test_initialization(
@@ -96,10 +113,12 @@ def test_initialization(
     torch.manual_seed(19)
     torch_module = torch_module_type(**torch_args)
 
-    # Ensure that initialization is different before patching.
-    _compare_modules(
-        default_nnx_module, nnx_params, torch_module, torch_params, equal=False
-    )
+    # Ensure that initialization is different before patching. We exclude some modules
+    # that already have consistent initialization.
+    if nnx_module_type not in {nnx.LayerNorm}:
+        _compare_modules(
+            default_nnx_module, nnx_params, torch_module, torch_params, equal=False
+        )
 
     torch.manual_seed(19)
     with torch_initialization():
@@ -113,11 +132,11 @@ def test_initialization(
     # Verify shapes and types.
     for nnx_param in nnx_params:
         patched_param = getattr(patched_nnx_module, nnx_param)
-        assert isinstance(patched_param, nnx.Param), (
-            f"Parameter '{nnx_param}' is not a Flax parameter."
+        assert isinstance(patched_param, (nnx.Param, float)), (
+            f"Parameter '{nnx_param}' is not a Flax parameter or number."
         )
         default_param = getattr(default_nnx_module, nnx_param)
-        assert patched_param.shape == default_param.shape
+        assert numpy.shape(patched_param) == numpy.shape(default_param)
 
     key = random.key(42)
     if input_dtype == jnp.float32:
@@ -127,8 +146,11 @@ def test_initialization(
     else:
         raise NotImplementedError(f"Unsupported dtype: {input_dtype}")
 
-    y = patched_nnx_module(x)
-    assert y.shape == output_shape
+    nnx_y = patched_nnx_module(x)
+    assert nnx_y.shape == output_shape
+
+    torch_y = torch_module(torch.as_tensor(x))
+    numpy.testing.assert_allclose(nnx_y, torch_y.detach().numpy(), rtol=1e-6, atol=1e-6)
 
 
 def test_explicit_init_takes_precedence() -> None:
@@ -154,16 +176,23 @@ def test_explicit_init_takes_precedence() -> None:
     assert (numpy.asarray(module.bias) == -42.0).all()
 
 
-unpatched_module_types = []
-queue = [nnx.Module]
-while queue:
-    cls = queue.pop()
-    for subcls in cls.__subclasses__():
-        if subcls not in _INITIALIZER_REGISTRY:
-            unpatched_module_types.append(subcls)
-        queue.append(subcls)
+def _discover_unpatched_module_types():
+    exclude = {
+        nnx.bridge.Module,
+        nnx.RNNCellBase,
+    }
+    module_types = []
+    queue = [nnx.Module]
+    while queue:
+        cls = queue.pop()
+        for subcls in cls.__subclasses__():
+            if subcls not in _INITIALIZER_REGISTRY:
+                if subcls not in exclude:
+                    module_types.append(subcls)
+            queue.append(subcls)
+    return sorted(module_types, key=lambda x: x.__class__.__name__)
 
 
-@pytest.mark.parametrize("unpatched_module_type", unpatched_module_types)
+@pytest.mark.parametrize("unpatched_module_type", _discover_unpatched_module_types())
 def test_unpatched_modules(unpatched_module_type: Type[nnx.Module]) -> None:
     pytest.skip(f"Module '{unpatched_module_type}' is not patched.")
